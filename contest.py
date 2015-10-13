@@ -67,18 +67,21 @@ def client(id_, uri, rate, stop_event):
     time_to_sleep = random.uniform(0, delta) # stagger startup
 
     while not stop_event.wait(time_to_sleep):
-        uuid_ = uuid1()
-        doc = {
-            'name': name,
-            'data': str(uuid_)
-        }
-        logging.debug('inserting %r', doc)
-        db[col].insert(doc, w=1)
-        logging.debug('reading %r', doc)
-        curs = db[col].find({'data': str(uuid_)})
-        assert(curs.count() == 1)
-        logging.debug('read %r', curs.next())
-        curs.close()
+        try:
+            uuid_ = uuid1()
+            doc = {
+                'name': name,
+                'data': str(uuid_)
+            }
+            logging.debug('inserting %r', doc)
+            db[col].insert(doc, w=1)
+            logging.debug('reading %r', doc)
+            curs = db[col].find({'data': str(uuid_)})
+            assert(curs.count() == 1)
+            logging.debug('read %r', curs.next())
+            curs.close()
+        except Exception as e:
+            logging.error('%s encountered an error on write/read: %r', name, e)
         time_to_sleep = delta + random.uniform(-tolerance, tolerance)
         logging.debug('%s going to sleep for %fs...', name, time_to_sleep)
     logging.info('%s exiting...', name)
@@ -145,8 +148,9 @@ def main():
                 num_clients = len(clients)
                 for i in xrange(step):
                     logging.debug('spawning client %d...', num_clients + i)
-                    clients.append(gevent.spawn(client, i, _CONNECTION_STR,
-                                   opts['--rate'], stop_event))
+                    clients.append(
+                        gevent.spawn(client, num_clients + i, _CONNECTION_STR,
+                                     opts['--rate'], stop_event))
                 _INC_CLIENTS = False
             gevent.sleep(.25)
 
