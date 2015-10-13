@@ -44,6 +44,7 @@ _INC_CLIENTS = False
 _DEC_CLIENTS = False
 _COL_BASE = 'foo'
 _COL_NUM = 10
+_INDEXES_CREATED = {}
 
 
 def client(id_, uri, rate, stop_event):
@@ -54,7 +55,12 @@ def client(id_, uri, rate, stop_event):
     c = MongoClient(uri)
     db = c.get_default_database()
     col = '{}{}'.format(_COL_BASE, id_ % _COL_NUM)
-    db[col].create_index('data')
+    if col in _INDEXES_CREATED:
+        _INDEXES_CREATED[col].wait()
+    else:
+        _INDEXES_CREATED[col] = Event()
+        db[col].create_index('data')
+        _INDEXES_CREATED[col].set()
 
     delta = 1 / rate
     tolerance = delta / 10
