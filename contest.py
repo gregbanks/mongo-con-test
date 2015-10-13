@@ -47,7 +47,7 @@ _COL_NUM = 10
 _INDEXES_CREATED = {}
 
 
-def client(id_, uri, rate, stop_event):
+def client(id_, uri, rate):
     name = '{}-client{}'.format(socket.getfqdn(), id_)
 
     logging.info('%s starting up', name)
@@ -66,7 +66,7 @@ def client(id_, uri, rate, stop_event):
     tolerance = delta / 10
     time_to_sleep = random.uniform(0, delta) # stagger startup
 
-    while not stop_event.wait(time_to_sleep):
+    while not gevent.sleep(time_to_sleep):
         try:
             uuid_ = uuid1()
             doc = {
@@ -120,8 +120,6 @@ def main():
     signal.signal(signal.SIGUSR1, sig_handler)
     signal.signal(signal.SIGUSR2, sig_handler)
 
-    stop_event = Event()
-
     logging.info('spawning clients...')
 
     clients = []
@@ -131,7 +129,7 @@ def main():
         for i in xrange(int(opts['--con-num'])):
             logging.debug('spawning client %d...', i)
             clients.append(gevent.spawn(client, i, _CONNECTION_STR,
-                           opts['--rate'], stop_event))
+                           opts['--rate']))
 
         while not _DONE:
             global _INC_CLIENTS, _DEC_CLIENTS
@@ -150,16 +148,13 @@ def main():
                     logging.debug('spawning client %d...', num_clients + i)
                     clients.append(
                         gevent.spawn(client, num_clients + i, _CONNECTION_STR,
-                                     opts['--rate'], stop_event))
+                                     opts['--rate']))
                 _INC_CLIENTS = False
             gevent.sleep(.25)
 
-        logging.info('signaling clients to exit...')
-        stop_event.set()
-
-        logging.info('waiting on clients...')
+        logging.info('killing on clients...')
         for c in clients:
-            c.join()
+            c.kill()
     except Exception as e:
         logging.exception('error running contest')
         return 1
