@@ -17,9 +17,6 @@ Args:
                             will be used if this is absent)
 
 """
-
-from __future__ import print_function, division
-
 from gevent import monkey; monkey.patch_all()
 
 import logging
@@ -50,10 +47,11 @@ _INDEXES_CREATED = {}
 def client(id_, uri, rate):
     name = '{}-client{}'.format(socket.getfqdn(), id_)
 
-    logging.info('%s starting up', name)
-
     c = MongoClient(uri)
     db = c.get_default_database()
+
+    logging.info('%s connected', name)
+
     col = '{}{}'.format(_COL_BASE, id_ % _COL_NUM)
     if col in _INDEXES_CREATED:
         _INDEXES_CREATED[col].wait()
@@ -153,7 +151,7 @@ def main():
             logging.debug('main thread sleeping...')
             gevent.sleep(2)
 
-        logging.info('killing on clients...')
+        logging.info('killing all clients...')
         for c in clients:
             c.kill()
     except Exception as e:
