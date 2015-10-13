@@ -150,7 +150,8 @@ def main():
                         gevent.spawn(client, num_clients + i, _CONNECTION_STR,
                                      opts['--rate']))
                 _INC_CLIENTS = False
-            gevent.sleep(.25)
+            logging.debug('main thread sleeping...')
+            gevent.sleep(2)
 
         logging.info('killing on clients...')
         for c in clients:
