@@ -33,6 +33,7 @@ import gevent
 
 from gevent.event import Event
 from pymongo import MongoClient
+from pymongo.errors import ServerSelectionTimeoutError
 
 
 _CONNECTION_STR = ''
@@ -41,6 +42,7 @@ _INC_CLIENTS = False
 _DEC_CLIENTS = False
 _COL_BASE = 'foo'
 _COL_NUM = 10
+_SPAWN_WAIT = .01
 _INDEXES_CREATED = {}
 
 
@@ -48,6 +50,20 @@ def client(id_, uri, rate):
     name = '{}-client{}'.format(socket.getfqdn(), id_)
 
     c = MongoClient(uri)
+
+    """
+    while True:
+        try:
+            c.admin.command('ping')
+        except ServerSelectionTimeoutError:
+            time_to_sleep = random.uniform(0, 10)
+            logging.debug('%s failed to select server, sleeping %f seconds...',
+                          name, time_to_sleep)
+            gevent.sleep(time_to_sleep)
+            continue
+        break
+    """
+
     db = c.get_default_database()
 
     logging.info('%s connected', name)
@@ -123,37 +139,42 @@ def main():
     clients = []
     step = int(opts['--step'])
 
-    try:
-        for i in xrange(int(opts['--con-num'])):
-            logging.debug('spawning client %d...', i)
-            clients.append(gevent.spawn(client, i, _CONNECTION_STR,
+    def start_clients(num_clients):
+        current_num_clients = len(clients)
+        for i in xrange(num_clients):
+            if _DONE:
+                break
+            logging.debug('spawning client %d...', current_num_clients + i)
+            clients.append(gevent.spawn(client, current_num_clients + i, _CONNECTION_STR,
                            opts['--rate']))
+            gevent.sleep(_SPAWN_WAIT)
 
+    def stop_clients(num_clients=None):
+        if num_clients is None:
+            num_clients = len(clients)
+        current_num_clients = len(clients)
+        for i in xrange(current_num_clients - 1,
+                        max(-1, current_num_clients - 1 - num_clients),
+                        -1):
+            logging.debug('killing client %d...', i)
+            c = clients.pop()
+            c.kill()
+
+    try:
+        start_clients(int(opts['--con-num']))
         while not _DONE:
             global _INC_CLIENTS, _DEC_CLIENTS
             if _DEC_CLIENTS:
                 num_clients = len(clients)
-                for i in xrange(num_clients - 1,
-                                max(-1, num_clients - 1 - step),
-                                -1):
-                    logging.debug('killing client %d...', i)
-                    c = clients.pop()
-                    c.kill()
                 _DEC_CLIENTS = False
             if _INC_CLIENTS:
-                num_clients = len(clients)
-                for i in xrange(step):
-                    logging.debug('spawning client %d...', num_clients + i)
-                    clients.append(
-                        gevent.spawn(client, num_clients + i, _CONNECTION_STR,
-                                     opts['--rate']))
+                start_clients(step)
                 _INC_CLIENTS = False
             logging.debug('main thread sleeping...')
             gevent.sleep(2)
 
         logging.info('killing all clients...')
-        for c in clients:
-            c.kill()
+        stop_clients()
     except Exception as e:
         logging.exception('error running contest')
         return 1
