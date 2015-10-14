@@ -1,3 +1,5 @@
+#!/usr/bin/env python
+
 """MongoDB connection test
 
 Usage:
@@ -11,6 +13,8 @@ Opts:
     -s --step NUM           the number of connections to increase or decrease
                             the pool by when receiving SIGUSER1 (-) or SIGUSER2 (+)
                             [default: 50]
+    --proc-num NUM          the number of child processes to start [default: 4]
+    --worker                run a worker instead of the master
 
 Args:
     CONNECTION_STR          the connection string (a default hard-coded value
@@ -49,20 +53,9 @@ _INDEXES_CREATED = {}
 def client(id_, uri, rate):
     name = '{}-client{}'.format(socket.getfqdn(), id_)
 
-    c = MongoClient(uri)
+    logging.info('%s connecting...', name)
 
-    """
-    while True:
-        try:
-            c.admin.command('ping')
-        except ServerSelectionTimeoutError:
-            time_to_sleep = random.uniform(0, 10)
-            logging.debug('%s failed to select server, sleeping %f seconds...',
-                          name, time_to_sleep)
-            gevent.sleep(time_to_sleep)
-            continue
-        break
-    """
+    c = MongoClient(uri)
 
     db = c.get_default_database()
 
@@ -101,7 +94,7 @@ def client(id_, uri, rate):
     logging.info('%s exiting...', name)
 
 
-def sig_handler(num, frame):
+def sig_handler(num):
     global _DONE, _INC_CLIENTS, _DEC_CLIENTS
     if num == signal.SIGINT:
         _DONE = True
@@ -111,28 +104,13 @@ def sig_handler(num, frame):
         _INC_CLIENTS = True
 
 
-def main():
-    opts = docopt.docopt(__doc__)
-    opts['--rate'] = float(opts['--rate'])
+def worker(opts):
+    gevent.signal(signal.SIGINT, sig_handler, signal.SIGINT)
+    gevent.signal(signal.SIGUSR1, sig_handler, signal.SIGUSR1)
+    gevent.signal(signal.SIGUSR2, sig_handler, signal.SIGUSR2)
 
-    global _CONNECTION_STR
-    _CONNECTION_STR = opts['CONNECTION_STR'] if opts['CONNECTION_STR'] \
-                                             else _CONNECTION_STR
-
-    logging.basicConfig(level=logging.DEBUG if opts['--verbose']
-                                            else logging.INFO)
-
-    try:
-        c = MongoClient(_CONNECTION_STR)
-    except Exception as e:
-        logging.exception('error connection to %s', _CONNECTION_STR)
-        return 1
-
-    c.close()
-
-    signal.signal(signal.SIGINT, sig_handler)
-    signal.signal(signal.SIGUSR1, sig_handler)
-    signal.signal(signal.SIGUSR2, sig_handler)
+    # avoid signal propagation
+    os.setpgrp()
 
     logging.info('spawning clients...')
 
@@ -165,12 +143,12 @@ def main():
         while not _DONE:
             global _INC_CLIENTS, _DEC_CLIENTS
             if _DEC_CLIENTS:
-                num_clients = len(clients)
+                stop_clients(len(clients))
                 _DEC_CLIENTS = False
             if _INC_CLIENTS:
                 start_clients(step)
                 _INC_CLIENTS = False
-            logging.debug('main thread sleeping...')
+            logging.debug('worker thread sleeping...')
             gevent.sleep(2)
 
         logging.info('killing all clients...')
@@ -178,6 +156,68 @@ def main():
     except Exception as e:
         logging.exception('error running contest')
         return 1
+    return 0
+
+
+def main():
+    opts = docopt.docopt(__doc__)
+    opts['--rate'] = float(opts['--rate'])
+
+    global _CONNECTION_STR
+    _CONNECTION_STR = opts['CONNECTION_STR'] if opts['CONNECTION_STR'] \
+                                             else _CONNECTION_STR
+
+    logging.basicConfig(
+        level=logging.DEBUG if opts['--verbose'] else logging.INFO,
+        format='[%(levelname)s] - %(asctime)s - %(process)s: %(message)s')
+
+    if opts['--worker']:
+        sys.exit(worker(opts))
+
+    try:
+        c = MongoClient(_CONNECTION_STR)
+    except Exception as e:
+        logging.exception('error connection to %s', _CONNECTION_STR)
+        return 1
+
+    c.close()
+
+    gevent.signal(signal.SIGINT, sig_handler, signal.SIGINT)
+    gevent.signal(signal.SIGUSR1, sig_handler, signal.SIGUSR1)
+    gevent.signal(signal.SIGUSR2, sig_handler, signal.SIGUSR2)
+
+    logging.info('spawning workers...')
+    children = []
+    for _ in xrange(int(opts['--proc-num'])):
+        pid = os.fork()
+        if pid == 0:
+            os.execv(os.path.abspath(__file__), sys.argv + ['--worker'])
+            raise RuntimeError()
+        else:
+            children.append(pid)
+    logging.info('spawned %r', children)
+
+    while not _DONE:
+        while not _DONE:
+            global _INC_CLIENTS, _DEC_CLIENTS
+            if _DEC_CLIENTS:
+                for pid in children:
+                    os.kill(pid, signal.SIGUSR1)
+                _DEC_CLIENTS = False
+            if _INC_CLIENTS:
+                for pid in children:
+                    os.kill(pid, signal.SIGUSR2)
+                _INC_CLIENTS = False
+            logging.debug('main thread sleeping...')
+            gevent.sleep(2)
+
+        for pid in children:
+            logging.info('killing worker process %d...', pid)
+            os.kill(pid, signal.SIGKILL)
+            _pid, status = os.waitpid(pid, 0)
+
+        logging.info('exiting...')
+
     return 0
 
 
